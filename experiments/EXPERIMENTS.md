@@ -60,6 +60,30 @@ is therefore a source-guided native port of the base ranking path —
 the acceptance test. The IUPAC source (MIT) is read at development
 time; no C is compiled, vendored, or called at runtime.
 
+## M2 landed (2026-10-22) — the numbering is the reference's, ported
+
+The source-guided port closed the question this file opened. The
+production engine (`inchi-rs#5`) reproduces the oracle's `/c` across
+the corpus with three decoded facts that guessing had missed:
+
+1. The base numbering is **hydrogen-free**: invariants are element
+   order (carbon first, then other elements by symbol, H last) and
+   heavy-atom degree. The acrylonitrile/alkyne fixtures disprove any
+   H-count involvement.
+2. Ranks are **position-based**: a cell's rank is the position past
+   its end, and refinement splits cells by sorted neighbor-rank lists
+   scanned from the cell's end (`DifferentiateRanks3`).
+3. The `/c` text is a **second DFS over the table**, not a walk over
+   the numbering: start at the lowest-degree atom, order neighbors by
+   subtree size (closures first), emit `(`,`,`,`)` branch delimiters
+   around all but the last child.
+
+Corpus result: green at pin v0.1.1. The one disagreement
+(breadth-448, two-bridge symmetric system) is triaged with its decoded
+reason. The playground stays as the record of how each rule was
+decoded; new decoding work moves into the Rust engine's modules
+directly.
+
 ## The /c emission grammar (decoded from the corpus)
 
 - Numbers bond to the current walk atom; a fresh number advances the
