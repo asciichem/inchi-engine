@@ -18,4 +18,4 @@ jobs:
         with:
           ruby-version: "3.4"
       - name: M1 formula-layer gate against the oracle corpus
-        run: ruby gate.rb .inchi-tests/corpus/fixtures/identity.json
+        run: ruby gate.rb .inchi-tests/corpus/fixtures
