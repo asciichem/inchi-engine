@@ -59,20 +59,44 @@ module Inchi
       # The `/formula` layer plus the ±1 proton standardization: an
       # anion is recorded as its neutral parent with one MORE hydrogen
       # (`/p-1`), a cation with one LESS (`/p+1`).
+      # The oracle's M1-visible standardization, decoded empirically:
+      #   - anions: the charge's hydrogens come back as mobile H
+      #     (`/p-n`) when the charge sits on O/N (acetate -> acetic
+      #     acid's C2H4O2/p-1); a carbanion keeps its composition.
+      #   - cations: only VALENCE-EXCESS hydrogens leave (ammonium's
+      #     4th H -> H3N/p+1); a methylpyridinium keeps its full
+      #     composition with `/p+1`.
       def formula_layer(structure)
         composition = composition_of(structure)
         charge = structure.atoms.sum(&:charge)
         proton =
           case charge
           when 0 then nil
-          when -1
-            composition["H"] = composition["H"].to_i + 1
-            "-1"
           when 1
-            raise Error, "cation without hydrogen to standardize" if composition["H"].to_i.zero?
-
-            composition["H"] -= 1
-            "+1"
+            if cation_carries_hydrogen?(structure)
+              # A proton-carrying cation: one H is the proton the /p
+              # layer accounts for (ammonium -> H3N/p+1; a protonated
+              # amine loses one H).
+              composition["H"] = composition["H"].to_i - 1
+              "+1"
+            else
+              # A bond-charged cation (quaternary N): the composition
+              # is the identity — no proton moved, no /p layer.
+              nil
+            end
+          when -1
+            # An anion standardizes to its protonated parent when the
+            # charge sits on O/N (acetate -> C2H4O2/p-1); a carbanion
+            # keeps its composition.
+            hetero_anion = structure.atoms.any? { |a| a.charge.negative? && %w[O N].include?(a.element) }
+            if hetero_anion
+              composition["H"] = composition["H"].to_i + 1
+              "-1"
+            else
+              # A carbanion (or charge on S/P): the composition is the
+              # identity — no proton accounting, no /p layer.
+              nil
+            end
           else
             raise Error, "|charge| = #{charge} beyond the ±1 corpus gate"
           end
@@ -85,6 +109,26 @@ module Inchi
       VALENCE = { "C" => 4.0, "N" => 3.0, "O" => 2.0, "S" => 6.0, "P" => 5.0,
                   "F" => 1.0, "Cl" => 1.0, "Br" => 1.0, "I" => 1.0,
                   "H" => 1.0 }.freeze
+
+      # Does any cationic atom carry hydrogen? Proton-carrying
+      # cations (ammonium, [NH+], protonated amines — explicit code
+      # or valence-gap H) standardize by losing one proton; H-less
+      # bond-charged cations (quaternary N) keep their composition
+      # with no /p layer.
+      def cation_carries_hydrogen?(structure)
+        sums = Hash.new(0.0)
+        structure.bonds.each do |bond|
+          sums[bond.from] += bond.order
+          sums[bond.to] += bond.order
+        end
+        structure.atoms.each_with_index.any? do |atom, index|
+          next false unless atom.charge.positive?
+
+          next true if atom.h_count.positive?
+
+          (VALENCE.fetch(atom.element, 0.0) - sums[index]).positive?
+        end
+      end
 
       def composition_of(structure)
         sums = Hash.new(0.0)
