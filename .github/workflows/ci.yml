@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: asciichem/inchi-tests
+          path: .inchi-tests
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: M1 formula-layer gate against the oracle corpus
+        run: ruby gate.rb .inchi-tests/corpus/fixtures/identity.json
