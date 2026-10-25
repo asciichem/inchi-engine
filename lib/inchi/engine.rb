@@ -9,7 +9,7 @@ module Inchi
   # M1 — the formula layer (plus the ±1 proton standardization the
   # charged corpus cases carry).
   class Engine
-    Atom = Struct.new(:element, :h_count, :charge, keyword_init: true)
+    Atom = Struct.new(:element, :h_count, :charge, :h_pinned, keyword_init: true)
     Bond = Struct.new(:from, :to, :order, keyword_init: true)
     Structure = Struct.new(:atoms, :bonds, keyword_init: true)
 
@@ -53,7 +53,9 @@ module Inchi
           end
         end
 
-        Structure.new(atoms: atoms, bonds: bonds)
+        structure = Structure.new(atoms: atoms, bonds: bonds)
+        normalize_internal_salts!(structure)
+        structure
       end
 
       # The `/formula` layer plus the ±1 proton standardization: an
@@ -103,6 +105,70 @@ module Inchi
         [hill_string(composition), proton]
       end
 
+      # The reference's internal-salt annihilation: an anionic
+      # O/S/Se/Te cancels with a FIXED cation anywhere in its
+      # connected component (nitro, N-oxide, betaine, diazo). The
+      # neutralized anion keeps its anionic reading — zero implicit H
+      # (h_pinned) — the reference never re-derives H after moving a
+      # charge. A proton-carrying cation never annihilates.
+      def normalize_internal_salts!(structure)
+        neighbors = Hash.new { |h, k| h[k] = [] }
+        structure.bonds.each do |bond|
+          neighbors[bond.from] << bond.to
+          neighbors[bond.to] << bond.from
+        end
+        sums = Hash.new(0.0)
+        structure.bonds.each do |bond|
+          sums[bond.from] += bond.order
+          sums[bond.to] += bond.order
+        end
+        consumed = []
+        anions = structure.atoms.each_index.select do |index|
+          atom = structure.atoms[index]
+          atom.charge.negative? && %w[O S Se Te N].include?(atom.element)
+        end
+        anions.each do |anion|
+          next if consumed[anion]
+
+          visited = { anion => true }
+          queue = [anion]
+          site = nil
+          until queue.empty?
+            current = queue.pop
+            cation_atom = structure.atoms[current]
+            no_carbon = neighbors[current].none? do |n|
+              structure.atoms[n].element == "C"
+            end
+            is_fixed_cation = cation_atom.charge.positive? && !consumed[current] &&
+                              !no_carbon && !cation_carries_hydrogen_atom?(
+                                cation_atom, sums[current]
+                              )
+            if is_fixed_cation
+              site = current
+              break
+            end
+            (neighbors[current] - visited.keys).each do |next_atom|
+              visited[next_atom] = true
+              queue << next_atom
+            end
+          end
+          next unless site
+
+          structure.atoms[anion].charge = 0
+          structure.atoms[anion].h_pinned = true
+          structure.atoms[site].charge = 0
+          consumed[anion] = consumed[site] = true
+        end
+      end
+
+      # The proton-related-cation test for one atom: an explicit H or
+      # a valence-deficient N/P center (the onium table).
+      def cation_carries_hydrogen_atom?(atom, bond_sum)
+        return true if atom.h_count.positive?
+
+        %w[N P].include?(atom.element) && bond_sum <= 3.0
+      end
+
       private
 
       BOND_ORDER = { 1 => 1.0, 2 => 2.0, 3 => 3.0, 4 => 1.5 }.freeze
@@ -141,10 +207,12 @@ module Inchi
           composition[atom.element] += 1
           hydrogens = if atom.h_count.positive?
                         atom.h_count
-                      elsif atom.charge.negative?
+                      elsif atom.h_pinned || atom.charge.negative?
                         # An anionic heteroatom carries no implicit H
                         # (O- of an acetate/carboxylate: the recorded
-                        # formula standardizes via the /p layer).
+                        # formula standardizes via the /p layer); a
+                        # salt-annihilated atom stays at its anionic
+                        # reading (h_pinned).
                         0
                       else
                         (VALENCE.fetch(atom.element, 0.0) - sums[index]).clamp(0.0, Float::INFINITY).to_i
